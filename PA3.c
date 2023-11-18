@@ -71,7 +71,7 @@ static ExTimes* findEE(TaskObject taskArray[], int num_tasks, SystemSpecs system
                         double current_value = calculateExpression(excecution_times[0].times[i], excecution_times[1].times[j], excecution_times[2].times[k], excecution_times[3].times[l], excecution_times[4].times[m]);
                         double difference = 1 - current_value;
                         double total_power = calculatePowerConsumption(excecution_times[0].times[i], powers[i]) + calculatePowerConsumption(excecution_times[1].times[j], powers[j]) + calculatePowerConsumption(excecution_times[2].times[k], powers[k]) + calculatePowerConsumption(excecution_times[3].times[l], powers[l]) + calculatePowerConsumption(excecution_times[4].times[m], powers[i]);
-                        // Check if the current combination is closer than the previous closest
+                        // Check if the current combination has lowest power
                         if (difference > 0  && total_power < lowest_power) {
                             lowest_power = total_power;
 
@@ -170,6 +170,64 @@ static ReadyList* runEDF(ReadyList *head, SystemSpecs system, int deadlines[], i
     task->remaining_time = task->WCET_1188;
     return newHead;
 }
+// float calculate_energy(int frequency, int wcet, SystemSpecs system) {
+//     switch (frequency) {
+//         case 1188: return (float)system.CPU_1188 * (float)wcet * 0.001;
+//         case 918: return (float)system.CPU_918 * (float)wcet * 0.001;
+//         case 648: return (float)system.CPU_648 * (float)wcet * 0.001;
+//         case 384: return (float)system.CPU_384 * (float)wcet * 0.001;
+//         default: return 0.0f;
+//     }
+// }
+static ReadyList* runEDF_EE(ReadyList *head, SystemSpecs system, int deadlines[], int *time, float *total_energy) {
+    // TaskObject *task = head->task;
+    // int frequencies[] = {1188, 918, 648, 384};
+    // int wcets[] = {task->WCET_1188, task->WCET_918, task->WCET_648, task->WCET_384};
+    // int selectedFrequency = frequencies[0];
+    // int wcet = wcets[0];
+    // float minEnergy = calculate_energy(selectedFrequency, wcet, system);
+
+    // // Select the most energy-efficient frequency
+    // for (int i = 1; i < 4; i++) {
+    //     if (wcets[i] <= task->deadline) {
+    //         float energy = calculate_energy(frequencies[i], wcets[i], system);
+    //         if (energy < minEnergy) {
+    //             selectedFrequency = frequencies[i];
+    //             wcet = wcets[i];
+    //             minEnergy = energy;
+    //         }
+    //     }
+    // }
+    TaskObject *task = head->task;
+    int closestDeadline = INT32_MAX;
+    for (int i = 0; i < 4; i++) {
+        if (*time + task->remaining_time > deadlines[i] && deadlines[i] < closestDeadline && deadlines[i] > 0 && deadlines[i] != task->next_deadline && deadlines[i] != *time) {
+            closestDeadline = deadlines[i];
+        }
+    }
+    if (closestDeadline != INT32_MAX) {
+        float energy = ((float)task->power * ((float)closestDeadline - *time))*0.001;
+        task->remaining_time = task->remaining_time - (closestDeadline - *time);
+        printf("%d %s %d %d %fJ rem: %d\n", *time, task->task_name, task->freq, closestDeadline-*time, energy, task->remaining_time);
+
+        *time = closestDeadline;
+        *total_energy += energy;
+        if (task->next_deadline == 0) {
+            task->next_deadline += task->deadline;
+        }
+        return head;
+    }
+    float energy = (float)task->power * (float)task->remaining_time * 0.001;
+    printf("%d %s %d %d %fJ\n", *time, task->task_name, task->freq, task->remaining_time, energy);
+    task->next_deadline += task->deadline;
+    task->ready = 0;
+    ReadyList *newHead = head->ptr;
+    head->ptr = NULL;
+    *total_energy += energy;
+    *time += task->remaining_time;
+    task->remaining_time = task->excecution_time;
+    return newHead;
+}
 static ReadyList* runRM(ReadyList *head, SystemSpecs system, int *time, float *total_energy){
     TaskObject *task = head->task;
     float energy = ((float)system.CPU_1188*(float)task->excecution_time)*0.001;
@@ -182,7 +240,6 @@ static ReadyList* runRM(ReadyList *head, SystemSpecs system, int *time, float *t
     *time += task->excecution_time;
     return newHead;
 }
-
 static ReadyList* runRM_EE(ReadyList *head, int CPU_freq, int CPU_power, int *time, float *total_energy){
     TaskObject *task = head->task;
     float energy = ((float)CPU_power*(float)task->excecution_time)*0.001;
@@ -195,7 +252,6 @@ static ReadyList* runRM_EE(ReadyList *head, int CPU_freq, int CPU_power, int *ti
     *time += task->excecution_time;
     return newHead;
 }
-
 static void RM_schedule(TaskObject tasks[], SystemSpecs system, int num_tasks, int Setting) {
     ReadyList *readylist = NULL;
     int time = 0;
@@ -258,7 +314,17 @@ static void EDF_schedule(TaskObject tasks[], SystemSpecs system, int num_tasks, 
     int time = 0;
     float total_energy_consumption = 0;
     int total_idle_time = 0;
+    if (Setting) {
+        TaskObject taskArr[] = {tasks[0], tasks[1], tasks[2], tasks[3], tasks[4]};
+        ExTimes *c_times = findEE(taskArr, num_tasks, system);
+        for (int i = 0; i < num_tasks; i++) {
+            tasks[i].excecution_time = c_times[i].closest;
+            tasks[i].remaining_time = tasks[i].excecution_time;
+            tasks[i].freq = c_times[i].freq;
+            tasks[i].power = c_times[i].power;
 
+        }
+    }
     while (time < system.system_ex_time) {
         for (int j = 0; j < num_tasks; j++) {
             if (time >= tasks[j].next_deadline && tasks[j].ready == 0) {
@@ -268,7 +334,8 @@ static void EDF_schedule(TaskObject tasks[], SystemSpecs system, int num_tasks, 
         }
         if (readylist) {
             if (Setting == EE_SETTING) {
-                //readylist = runEDF_EE(readylist, system, &time, &total_energy_consumption);
+                int deadLines[] = {tasks[0].next_deadline, tasks[1].next_deadline, tasks[2].next_deadline, tasks[3].next_deadline, tasks[4].next_deadline};
+                readylist = runEDF_EE(readylist, system, deadLines, &time, &total_energy_consumption);
             } else {
                 int deadLines[] = {tasks[0].next_deadline, tasks[1].next_deadline, tasks[2].next_deadline, tasks[3].next_deadline, tasks[4].next_deadline};
                 readylist = runEDF(readylist, system, deadLines, &time, &total_energy_consumption);
@@ -295,8 +362,8 @@ static void EDF_schedule(TaskObject tasks[], SystemSpecs system, int num_tasks, 
 }
 int main(int argc, char **argv){
     FILE *file;
-    file = fopen("input1.txt", "r");
-
+    file = fopen(argv[1], "r");
+    
     int num_tasks;
     SystemSpecs system;
 
@@ -323,22 +390,25 @@ int main(int argc, char **argv){
     
 
     // main functionality
-    if (strcmp(argv[1], "RM") == 0) {
-        if (strcmp(argv[2], "EE") == 0) { // RM EE
+    if (strcmp(argv[2], "RM") == 0) {
+        if (argv[3] && strcmp(argv[3], "EE") == 0) { // RM EE
             RM_schedule(taskArray, system, num_tasks, EE_SETTING);
+            exit(0);
         } else { // RM
             RM_schedule(taskArray, system, num_tasks, DEFAULT);
             exit(0);
         }
-    } else if (strcmp(argv[1], "EDF") == 0) {
-        if (strcmp(argv[3], "EE") == 0) { //EDF EE
-
+    } else if (strcmp(argv[2], "EDF") == 0) {
+        if (argv[3] && strcmp(argv[3], "EE") == 0) { //EDF EE
+            EDF_schedule(taskArray, system, num_tasks, EE_SETTING);
+            exit(0);
         } else { // EDF
             EDF_schedule(taskArray, system, num_tasks, DEFAULT);
+            exit(0);
         }
     } else {
         printf("Invalid Arguements");
         exit(1);
-    }
+    } 
     return 0;
 }
