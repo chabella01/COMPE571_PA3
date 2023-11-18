@@ -13,6 +13,7 @@ typedef struct {
     int WCET_384;
     int next_deadline;
     int ready;
+    int remaining_time;
     int excecution_time;
     int power;
 
@@ -102,25 +103,31 @@ static ExTimes* findEE(TaskObject taskArray[], int num_tasks, SystemSpecs system
     }
     return excecution_times;
 }
-static ReadyList* insert(ReadyList* head, TaskObject *task){ //insert task into ready list sorted by deadline (shortest deadline more priority)
+static ReadyList* insert(ReadyList* head, TaskObject *task) {
     ReadyList *tmp, *prev, *next;
     tmp = (ReadyList*)malloc(sizeof(ReadyList));
     tmp->task = task;
     tmp->ptr = NULL;
-    if(head == NULL) {
+    if (head == NULL) {
         head = tmp;
     } else {
         next = head;
         prev = NULL;
-
-        while(next!=NULL && next->task->deadline<=task->deadline){
-            prev = next;
-            next = next->ptr;
+        if (task->next_deadline == 0){
+            while (next != NULL && next->task->deadline <= task->deadline) {
+                prev = next;
+                next = next->ptr;
+            }
+        } else {
+            while (next != NULL && next->task->next_deadline <= task->next_deadline) {
+                prev = next;
+                next = next->ptr;
+            }
         }
-        if(next == NULL) {
+        if (next == NULL) {
             prev->ptr = tmp;
         } else {
-            if(prev){
+            if (prev) {
                 tmp->ptr = prev->ptr;
                 prev->ptr = tmp;
             } else {
@@ -131,7 +138,38 @@ static ReadyList* insert(ReadyList* head, TaskObject *task){ //insert task into 
     }
     return head;
 }
+static ReadyList* runEDF(ReadyList *head, SystemSpecs system, int deadlines[], int *time, float *total_energy) {
+    TaskObject *task = head->task;
+    int closestDeadline = INT32_MAX;
+    for (int i = 0; i < 4; i++) {
+        if (*time + task->remaining_time > deadlines[i] && deadlines[i] < closestDeadline && deadlines[i] > 0 && deadlines[i] != task->next_deadline && deadlines[i] != *time) {
+            closestDeadline = deadlines[i];
+        }
+    }
 
+    if (closestDeadline != INT32_MAX) {
+        float energy = ((float)system.CPU_1188 * ((float)closestDeadline - *time))*0.001;
+        task->remaining_time = task->remaining_time - (closestDeadline - *time);
+        printf("%d %s %d %d %fJ rem: %d\n", *time, task->task_name, 1188, closestDeadline-*time, energy, task->remaining_time);
+
+        *time = closestDeadline;
+        *total_energy += energy;
+        if (task->next_deadline == 0) {
+            task->next_deadline += task->deadline;
+        }
+        return head;
+    }
+    float energy = ((float)system.CPU_1188 * (float)task->remaining_time) * 0.001;
+    printf("%d %s %d %d %fJ\n", *time, task->task_name, 1188, task->remaining_time, energy);
+    task->next_deadline += task->deadline;
+    task->ready = 0;
+    ReadyList *newHead = head->ptr;
+    head->ptr = NULL;
+    *total_energy += energy;
+    *time += task->remaining_time;
+    task->remaining_time = task->WCET_1188;
+    return newHead;
+}
 static ReadyList* runRM(ReadyList *head, SystemSpecs system, int *time, float *total_energy){
     TaskObject *task = head->task;
     float energy = ((float)system.CPU_1188*(float)task->excecution_time)*0.001;
@@ -215,7 +253,46 @@ static void RM_schedule(TaskObject tasks[], SystemSpecs system, int num_tasks, i
 
 
 }
+static void EDF_schedule(TaskObject tasks[], SystemSpecs system, int num_tasks, int Setting) {
+    ReadyList *readylist = NULL;
+    int time = 0;
+    float total_energy_consumption = 0;
+    int total_idle_time = 0;
 
+    while (time < system.system_ex_time) {
+        for (int j = 0; j < num_tasks; j++) {
+            if (time >= tasks[j].next_deadline && tasks[j].ready == 0) {
+                tasks[j].ready = 1;
+                readylist = insert(readylist, &tasks[j]);
+            }
+        }
+        if (readylist) {
+            if (Setting == EE_SETTING) {
+                //readylist = runEDF_EE(readylist, system, &time, &total_energy_consumption);
+            } else {
+                int deadLines[] = {tasks[0].next_deadline, tasks[1].next_deadline, tasks[2].next_deadline, tasks[3].next_deadline, tasks[4].next_deadline};
+                readylist = runEDF(readylist, system, deadLines, &time, &total_energy_consumption);
+            }
+        } else {
+            int closestDeadline = INT32_MAX;
+            int index = 0;
+            for (int k = 0; k < num_tasks; k++) {
+                if (tasks[k].next_deadline - time < closestDeadline) {
+                    closestDeadline = tasks[k].next_deadline - time;
+                    index = k;
+                }
+            }
+            int idle_time = tasks[index].next_deadline - time;
+            total_idle_time += idle_time;
+            float energy = (float)idle_time * (float)system.CPU_idle * 0.001;
+            printf("%d IDLE IDLE %d %fJ\n", time, idle_time, energy);
+            total_energy_consumption += energy;
+            time = tasks[index].next_deadline;
+        }
+    }
+
+    printf("%fJ %f%% %ds\n", total_energy_consumption, (float)total_idle_time / (float)system.system_ex_time, system.system_ex_time);
+}
 int main(int argc, char **argv){
     FILE *file;
     file = fopen("input1.txt", "r");
@@ -239,28 +316,29 @@ int main(int argc, char **argv){
         taskArray[i].excecution_time = taskArray[i].WCET_1188;
         taskArray[i].freq = 1188;
         taskArray[i].power = 0;
+        taskArray[i].remaining_time = taskArray[i].WCET_1188;
         // printf("%s %d %d %d %d %d\n", taskArray[i].task_name, taskArray[i].deadline, taskArray[i].WCET_1188, taskArray[i].WCET_918, taskArray[i].WCET_648, taskArray[i].WCET_384);
     }
 
-    RM_schedule(taskArray, system, num_tasks, EE_SETTING);
+    
 
     // main functionality
-    // if (strcmp(argv[2], "RM") == 0) {
-    //     if (strcmp(argv[3], "EE") == 0) { // RM EE
+    if (strcmp(argv[1], "RM") == 0) {
+        if (strcmp(argv[2], "EE") == 0) { // RM EE
+            RM_schedule(taskArray, system, num_tasks, EE_SETTING);
+        } else { // RM
+            RM_schedule(taskArray, system, num_tasks, DEFAULT);
+            exit(0);
+        }
+    } else if (strcmp(argv[1], "EDF") == 0) {
+        if (strcmp(argv[3], "EE") == 0) { //EDF EE
 
-    //     } else { // RM
-    //         RM_schedule(tasks, system);
-    //         exit(0);
-    //     }
-    // } else if (strcmp(argv[2], "EDF") == 0) {
-    //     if (strcmp(argv[3], "EE") == 0) { //EDF EE
-
-    //     } else { // EDF
-
-    //     }
-    // } else {
-    //     printf("Invalid Arguements");
-    //     exit(1);
-    // }
+        } else { // EDF
+            EDF_schedule(taskArray, system, num_tasks, DEFAULT);
+        }
+    } else {
+        printf("Invalid Arguements");
+        exit(1);
+    }
     return 0;
 }
