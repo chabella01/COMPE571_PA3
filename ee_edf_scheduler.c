@@ -11,6 +11,7 @@ typedef struct {
     int WCET_648;
     int WCET_384;
     int next_deadline;
+    int remaining_time;
     int ready;
 } TaskObject;
 
@@ -41,9 +42,16 @@ static ReadyList* insert(ReadyList* head, TaskObject *task) {
     } else {
         next = head;
         prev = NULL;
-        while (next != NULL && next->task->deadline <= task->deadline) {
-            prev = next;
-            next = next->ptr;
+        if (task->next_deadline == 0){
+            while (next != NULL && next->task->deadline <= task->deadline) {
+                prev = next;
+                next = next->ptr;
+            }
+        } else {
+            while (next != NULL && next->task->next_deadline <= task->next_deadline) {
+                prev = next;
+                next = next->ptr;
+            }
         }
         if (next == NULL) {
             prev->ptr = tmp;
@@ -60,16 +68,36 @@ static ReadyList* insert(ReadyList* head, TaskObject *task) {
     return head;
 }
 
-static ReadyList* runEDF(ReadyList *head, SystemSpecs system, int *time, float *total_energy) {
+static ReadyList* runEDF(ReadyList *head, SystemSpecs system, int deadlines[], int *time, float *total_energy) {
     TaskObject *task = head->task;
-    float energy = ((float)system.CPU_1188 * (float)task->WCET_1188) * 0.001;
-    printf("%d %s %d %d %fJ\n", *time, task->task_name, 1188, task->WCET_1188, energy);
+    int closestDeadline = INT32_MAX;
+    for (int i = 0; i < 4; i++) {
+        if (*time + task->remaining_time > deadlines[i] && deadlines[i] < closestDeadline && deadlines[i] > 0 && deadlines[i] != task->next_deadline && deadlines[i] != *time) {
+            closestDeadline = deadlines[i];
+        }
+    }
+
+    if (closestDeadline != INT32_MAX) {
+        float energy = ((float)system.CPU_1188 * ((float)closestDeadline - *time))*0.001;
+        task->remaining_time = task->remaining_time - (closestDeadline - *time);
+        printf("%d %s %d %d %fJ rem: %d\n", *time, task->task_name, 1188, closestDeadline-*time, energy, task->remaining_time);
+
+        *time = closestDeadline;
+        *total_energy += energy;
+        if (task->next_deadline == 0) {
+            task->next_deadline += task->deadline;
+        }
+        return head;
+    }
+    float energy = ((float)system.CPU_1188 * (float)task->remaining_time) * 0.001;
+    printf("%d %s %d %d %fJ\n", *time, task->task_name, 1188, task->remaining_time, energy);
     task->next_deadline += task->deadline;
     task->ready = 0;
     ReadyList *newHead = head->ptr;
     head->ptr = NULL;
     *total_energy += energy;
-    *time += task->WCET_1188;
+    *time += task->remaining_time;
+    task->remaining_time = task->WCET_1188;
     return newHead;
 }
 
@@ -131,7 +159,8 @@ static void EDF_schedule(TaskObject tasks[], SystemSpecs system, int num_tasks, 
             if (Setting == EE_SETTING) {
                 readylist = runEDF_EE(readylist, system, &time, &total_energy_consumption);
             } else {
-                readylist = runEDF(readylist, system, &time, &total_energy_consumption);
+                int deadLines[] = {tasks[0].next_deadline, tasks[1].next_deadline, tasks[2].next_deadline, tasks[3].next_deadline, tasks[4].next_deadline};
+                readylist = runEDF(readylist, system, deadLines, &time, &total_energy_consumption);
             }
         } else {
             int closestDeadline = INT_MAX;
@@ -174,11 +203,12 @@ int main(int argc, char **argv) {
         fscanf(file, "%s %d %d %d %d %d", taskArray[i].task_name, &taskArray[i].deadline, &taskArray[i].WCET_1188, &taskArray[i].WCET_918, &taskArray[i].WCET_648, &taskArray[i].WCET_384);
         taskArray[i].next_deadline = 0;
         taskArray[i].ready = 0;
+        taskArray[i].remaining_time = taskArray[i].WCET_1188;
     }
 
     fclose(file);
 
-    EDF_schedule(taskArray, system, num_tasks, EE_SETTING); // Use DEFAULT for non-EE scheduling
+    EDF_schedule(taskArray, system, num_tasks, DEFAULT); // Use DEFAULT for non-EE scheduling
 
     return 0;
 }
