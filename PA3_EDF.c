@@ -11,6 +11,7 @@ typedef struct {
     int WCET_384;
     int next_deadline;
     int ready;
+    int remaining_execution_time;
 
 } TaskObject; // Object for holding task specific values
 
@@ -192,6 +193,7 @@ int main(int argc, char **argv){
         fscanf(file, "%s %d %d %d %d %d", taskArray[i].task_name, &taskArray[i].deadline, &taskArray[i].WCET_1188, &taskArray[i].WCET_918, &taskArray[i].WCET_648, &taskArray[i].WCET_384);
         taskArray[i].next_deadline = 0;
         taskArray[i].ready = 0;
+        taskArray[i].remaining_execution_time = taskArray[i].WCET_1188; // Assuming using WCET_1188 for simplicity
         // printf("%s %d %d %d %d %d\n", taskArray[i].task_name, taskArray[i].deadline, taskArray[i].WCET_1188, taskArray[i].WCET_918, taskArray[i].WCET_648, taskArray[i].WCET_384);
     }
 
